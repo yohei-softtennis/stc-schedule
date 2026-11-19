@@ -1,0 +1,1 @@
+{"description":"岩瀬STC予定表（予定共有・コーチ出欠・参加者数・日程調整）","engines":{"node":">=18"},"main":"server.js","name":"stc-schedule","private":true,"scripts":{"start":"node server.js"},"version":"1.0.0"}
