@@ -12,7 +12,7 @@ const DATA_FILE = path.join(DATA_DIR, 'data.json');
 
 /* ---------- データ ---------- */
 function blankDB() {
-  return { adminPassHash: null, coaches: [], events: [], attendance: {}, polls: [], sessions: {} };
+  return { adminPassHash: null, coaches: [], players: [], events: [], attendance: {}, pattendance: {}, polls: [], sessions: {} };
 }
 let DB = blankDB();
 function loadDB() {
@@ -21,9 +21,11 @@ function loadDB() {
     const d = JSON.parse(raw);
     DB = Object.assign(blankDB(), d);
     if (!Array.isArray(DB.coaches)) DB.coaches = [];
+    if (!Array.isArray(DB.players)) DB.players = [];
     if (!Array.isArray(DB.events)) DB.events = [];
     if (!Array.isArray(DB.polls)) DB.polls = [];
     if (!DB.attendance || typeof DB.attendance !== 'object') DB.attendance = {};
+    if (!DB.pattendance || typeof DB.pattendance !== 'object') DB.pattendance = {};
     if (!DB.sessions || typeof DB.sessions !== 'object') DB.sessions = {};
   } catch (e) { DB = blankDB(); }
 }
@@ -107,6 +109,10 @@ function coachByToken(k) {
   if (!k) return null;
   return DB.coaches.find(c => c.token === k) || null;
 }
+function playerByToken(k) {
+  if (!k) return null;
+  return DB.players.find(p => p.token === k) || null;
+}
 
 /* ---------- 公開用データ整形 ---------- */
 function eventPublic(ev) {
@@ -119,12 +125,23 @@ function eventPublic(ev) {
     else if (st === 'no') { noNames.push(c.name); answered++; }
     else if (st === 'maybe') { maybeNames.push(c.name); answered++; }
   }
+  const patt = DB.pattendance[ev.id] || {};
+  const pYesNames = [], pNoNames = [], pMaybeNames = [];
+  let pAnswered = 0;
+  for (const pl of DB.players) {
+    const st = patt[pl.id];
+    if (st === 'yes') { pYesNames.push(pl.name); pAnswered++; }
+    else if (st === 'no') { pNoNames.push(pl.name); pAnswered++; }
+    else if (st === 'maybe') { pMaybeNames.push(pl.name); pAnswered++; }
+  }
   return {
     id: ev.id, date: ev.date, group: ev.group, title: ev.title,
     start: ev.start || '', end: ev.end || '', place: ev.place || '',
     note: ev.note || '', tentative: !!ev.tentative,
+    stage: ev.stage === 'plan' ? 'plan' : 'fixed',
     participants: (ev.participants === null || ev.participants === undefined) ? null : ev.participants,
-    yesNames, noNames, maybeNames, answeredCount: answered, coachCount: DB.coaches.length
+    yesNames, noNames, maybeNames, answeredCount: answered, coachCount: DB.coaches.length,
+    pYesNames, pNoNames, pMaybeNames, pAnsweredCount: pAnswered, playerCount: DB.players.length
   };
 }
 function eventsInRange(from, to) {
@@ -228,7 +245,7 @@ function viewerPage() {
 <div class="big" id="mtitle" style="text-align:center"></div>
 <button class="sub" onclick="moveMonth(1)">翌月 ▶</button>
 </div>
-<div class="mut" style="margin-top:6px">引率は、出欠で「出席」と回答したコーチです。未確定の予定には「？」が付きます。</div>
+<div class="mut" style="margin-top:6px">この表はコートが確保できた「確定」の予定だけを表示しています。引率は、出欠で「出席」と回答したコーチです。未確定の予定には「？」が付きます。</div>
 </div>
 <div class="scrollx"><table id="tbl"></table></div>
 <div class="mut" style="margin-top:8px">このページは自動で最新の状態に更新されます。</div>
@@ -248,6 +265,7 @@ function evHtml(e){
   if(e.place) h += '<div>📍 '+esc(e.place)+'</div>';
   if(e.yesNames.length) h += '<div>引率：'+e.yesNames.map(esc).join('・')+'</div>';
   else h += '<div class="mut">引率：未定</div>';
+  if(e.pYesNames && e.pYesNames.length) h += '<div>参加予定：'+e.pYesNames.length+'人</div>';
   if(e.participants!=null) h += '<div>参加者数：'+e.participants+'人</div>';
   if(e.note) h += '<div class="mut">'+esc(e.note)+'</div>';
   return h+'</div>';
@@ -303,6 +321,7 @@ function load(){
     document.getElementById('who').innerHTML = '<div class="notice"><b>'+esc(d.coach.name)+'</b> コーチのページです。予定ごとに出席・欠席・未定を押してください。過去の予定は参加実績として入力できます。回答はそのまま予定表の引率と出欠一覧に反映されます。</div>';
     function evCard(e){
       var h = '<div class="card"><div><span class="badge '+(e.group==='jr'?'b-jr':'b-stc')+'">'+(e.group==='jr'?'Jr':'STC')+'</span>';
+      if(e.stage==='plan') h += '<span class="badge b-ques">計画（コート予約前）</span>';
       h += '<b>'+dl(e.date)+'</b> <span class="t" style="font-weight:700">'+esc(e.title)+(e.tentative?' ？':'')+'</span></div>';
       if(e.start) h += '<div>🕐 '+esc(e.start)+(e.end?'〜'+esc(e.end):'')+'</div>';
       if(e.place) h += '<div>📍 '+esc(e.place)+'</div>';
@@ -353,6 +372,58 @@ load();
 </script></body></html>`;
 }
 
+/* ---------- ページ：選手・保護者専用（参加登録） ---------- */
+function playerPage() {
+  return `<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>参加登録ページ｜岩瀬STC</title><style>${CSS}</style></head><body>
+<header><div class="ttl">🎾 参加登録ページ</div>
+<nav><a href="/">予定表</a></nav></header>
+<div class="wrap">
+<div id="who"></div>
+<div id="list"></div>
+</div>
+<footer>岩瀬ジュニア・岩瀬STC 開発アプリ</footer>
+<script>
+var K = new URLSearchParams(location.search).get('k') || '';
+var WD = ['日','月','火','水','木','金','土'];
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function dl(ds){ var d=new Date(ds+'T00:00:00'); return (d.getMonth()+1)+'/'+d.getDate()+'（'+WD[d.getDay()]+'）'; }
+function load(){
+  fetch('/api/player?k='+encodeURIComponent(K)).then(function(r){ return r.json(); }).then(function(d){
+    if(d.error){ document.getElementById('who').innerHTML = '<div class="err">'+esc(d.error)+'</div>'; return; }
+    document.getElementById('who').innerHTML = '<div class="notice"><b>'+esc(d.player.name)+'</b> さんの参加登録ページです。練習・イベントごとに、参加する／参加しない／未定を押してください。終わった予定は、実際に参加したかどうかを入力してください。</div>';
+    function evCard(e){
+      var h = '<div class="card"><div><span class="badge '+(e.group==='jr'?'b-jr':'b-stc')+'">'+(e.group==='jr'?'Jr':'STC')+'</span>';
+      h += '<b>'+dl(e.date)+'</b> <span style="font-weight:700">'+esc(e.title)+(e.tentative?' ？':'')+'</span></div>';
+      if(e.start) h += '<div>🕐 '+esc(e.start)+(e.end?'〜'+esc(e.end):'')+'</div>';
+      if(e.place) h += '<div>📍 '+esc(e.place)+'</div>';
+      if(e.note) h += '<div class="mut">'+esc(e.note)+'</div>';
+      h += '<div class="mut">参加予定：'+e.pYesNames.length+'人（回答 '+e.pAnsweredCount+'/'+e.playerCount+'人）</div>';
+      h += '<div class="attbtns">'
+        + '<button class="'+(e.mine==='yes'?'on-yes':'')+'" onclick="attend(\\''+e.id+'\\',\\'yes\\')">参加する</button>'
+        + '<button class="'+(e.mine==='maybe'?'on-maybe':'')+'" onclick="attend(\\''+e.id+'\\',\\'maybe\\')">未定</button>'
+        + '<button class="'+(e.mine==='no'?'on-no':'')+'" onclick="attend(\\''+e.id+'\\',\\'no\\')">参加しない</button></div>';
+      return h + '</div>';
+    }
+    var up = d.events.filter(function(e){ return e.date >= d.today; });
+    var past = d.events.filter(function(e){ return e.date < d.today; }).reverse();
+    var h = '<h2 style="margin:4px 0 8px">今後の予定</h2>';
+    if(!up.length) h += '<div class="card">今後の予定はまだ登録されていません。</div>';
+    up.forEach(function(e){ h += evCard(e); });
+    if(past.length){
+      h += '<h2 style="margin:16px 0 8px">過去の予定（参加実績の入力）</h2>';
+      past.forEach(function(e){ h += evCard(e); });
+    }
+    document.getElementById('list').innerHTML = h;
+  });
+}
+function post(url, body){ return fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)}).then(function(r){ return r.json(); }); }
+function attend(id, st){ post('/api/player/attend', {k:K, eventId:id, status:st}).then(load); }
+load();
+</script></body></html>`;
+}
+
 /* ---------- ページ：管理者 ---------- */
 function adminPage() {
   return `<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8">
@@ -376,9 +447,11 @@ function adminPage() {
 <div><label>場所</label><input id="ev-place" placeholder="例：ラスカ12"></div>
 </div>
 <div class="row">
-<div><label>参加者数（ジュニア）</label><input type="number" min="0" id="ev-pc" placeholder="未入力"></div>
+<div><label>参加者数（ジュニア・手入力）</label><input type="number" min="0" id="ev-pc" placeholder="未入力"></div>
 <div><label>未確定</label><select id="ev-tent"><option value="">確定</option><option value="1">未確定（？を付ける）</option></select></div>
+<div><label>段階</label><select id="ev-stage"><option value="fixed">確定（コート確保済み・予定表に公開）</option><option value="plan">計画（コーチ決定・まだ予約前）</option></select></div>
 </div>
+<div class="mut">「計画」の予定は予定表（公開ページ）には出ません。20日の予約でコートが取れたら「確定」に切り替えると、コーチ・保護者に共有されます。定例の一括登録は「計画」で入ります。</div>
 <label>備考</label><input id="ev-note">
 <div class="row" style="margin-top:10px">
 <button onclick="saveEvent()">保存する</button>
@@ -410,6 +483,15 @@ function adminPage() {
 <h3>出欠確認表（今後の予定 × コーチ）</h3>
 <div class="scrollx"><table id="atttbl"></table></div>
 <div class="mut">空欄（赤）は未回答です。コーチ本人が自分のページで回答すると、ここに自動で入ります。</div>
+</div>
+
+<div class="card"><h2>🧒 選手（保護者）管理と参加登録</h2>
+<div class="mut">選手を登録すると、その子専用の参加登録ページのリンクが発行されます。保護者にリンクを送ると、練習・イベントごとに「参加する／参加しない」を登録でき、参加予定者と人数が自動で集計されます（予定の編集欄と予定表に表示）。</div>
+<div class="row">
+<div><label>選手名を追加</label><input id="player-name" placeholder="例：山田太郎"></div>
+<div style="flex:0;align-self:end"><button onclick="addPlayer()">追加</button></div>
+</div>
+<div id="playerlist" style="margin-top:10px"></div>
 </div>
 
 <div class="card"><h2>📅 日程調整（伝助の代わり）</h2>
@@ -452,21 +534,40 @@ function loadAll(){
   fetch('/api/admin/state').then(function(r){ return r.json(); }).then(function(d){
     if(d.error){ authView(); return; }
     STATE = d;
-    renderEvents(); renderCoaches(); renderAtt(); renderPolls();
+    renderEvents(); renderCoaches(); renderAtt(); renderPlayers(); renderPolls();
   });
 }
 function renderEvents(){
   var h = '<table><tr><th>日付</th><th>予定</th><th></th></tr>';
   STATE.events.forEach(function(e){
-    h += '<tr><td style="white-space:nowrap">'+dl(e.date)+'</td><td><span class="badge '+(e.group==='jr'?'b-jr':'b-stc')+'">'+(e.group==='jr'?'Jr':'STC')+'</span><b>'+esc(e.title)+(e.tentative?' ？':'')+'</b>'
+    h += '<tr><td style="white-space:nowrap">'+dl(e.date)+'</td><td><span class="badge '+(e.group==='jr'?'b-jr':'b-stc')+'">'+(e.group==='jr'?'Jr':'STC')+'</span>'
+      + (e.stage==='plan'?'<span class="badge b-ques">計画</span>':'<span class="badge b-stc">確定</span>')
+      + '<b>'+esc(e.title)+(e.tentative?' ？':'')+'</b>'
       + (e.start?' '+esc(e.start)+(e.end?'〜'+esc(e.end):''):'') + (e.place?' 📍'+esc(e.place):'')
-      + '<div class="mut">引率：'+(e.yesNames.length?e.yesNames.map(esc).join('・'):'未定')+'／人数：'+(e.participants==null?'—':e.participants)+'</div></td>'
-      + '<td style="white-space:nowrap"><button class="sub" onclick="editEvent(\\''+e.id+'\\')">編集</button> <button class="danger" onclick="delEvent(\\''+e.id+'\\')">削除</button></td></tr>';
+      + '<div class="mut">引率：'+(e.yesNames.length?e.yesNames.map(esc).join('・'):'未定')+'／手入力人数：'+(e.participants==null?'—':e.participants)+'</div>'
+      + '<div class="mut">参加予定：'+e.pYesNames.length+'人'+(e.pYesNames.length?'（'+e.pYesNames.map(esc).join('・')+'）':'')+'／回答 '+e.pAnsweredCount+'/'+e.playerCount+'人</div></td>'
+      + '<td style="white-space:nowrap"><button class="sub" onclick="toggleStage(\\''+e.id+'\\',\\''+(e.stage==='plan'?'fixed':'plan')+'\\')">'+(e.stage==='plan'?'確定にする':'計画に戻す')+'</button> <button class="sub" onclick="editEvent(\\''+e.id+'\\')">編集</button> <button class="danger" onclick="delEvent(\\''+e.id+'\\')">削除</button></td></tr>';
   });
   if(!STATE.events.length) h += '<tr><td colspan="3" class="mut">予定はまだありません。</td></tr>';
   document.getElementById('evlist').innerHTML = h + '</table>';
 }
-function clearEventForm(){ ['ev-id','ev-title','ev-place','ev-note','ev-pc'].forEach(function(i){ document.getElementById(i).value=''; }); document.getElementById('ev-tent').value=''; }
+function clearEventForm(){ ['ev-id','ev-title','ev-place','ev-note','ev-pc'].forEach(function(i){ document.getElementById(i).value=''; }); document.getElementById('ev-tent').value=''; document.getElementById('ev-stage').value='fixed'; }
+function toggleStage(id, stage){ post('/api/admin/event/stage', {id:id, stage:stage}).then(function(d){ if(d.error) alert(d.error); else loadAll(); }); }
+function renderPlayers(){
+  var h = '';
+  (STATE.players||[]).forEach(function(pl){
+    var link = location.origin + '/player?k=' + pl.token;
+    h += '<div style="border:1px solid #dde5dd;border-radius:10px;padding:10px;margin-bottom:8px"><b>'+esc(pl.name)+'</b> さん'
+      + '<div class="mut" style="word-break:break-all">参加登録ページ：'+esc(link)+'</div>'
+      + '<div class="row" style="margin-top:6px"><button class="sub" onclick="copyPlayerLink(\\''+pl.token+'\\')">リンクをコピー</button>'
+      + '<button class="danger" onclick="delPlayer(\\''+pl.id+'\\')">削除</button></div></div>';
+  });
+  if(!(STATE.players||[]).length) h = '<div class="mut">選手がまだ登録されていません。名前を追加すると、その子専用の参加登録リンクが発行されます。</div>';
+  document.getElementById('playerlist').innerHTML = h;
+}
+function copyPlayerLink(token){ var link = location.origin + '/player?k=' + token; if(navigator.clipboard) navigator.clipboard.writeText(link).then(function(){ alert('コピーしました。このリンクをその選手の保護者にLINEで送ってください。'); }); else prompt('このリンクをコピーしてください', link); }
+function addPlayer(){ var n = document.getElementById('player-name').value.trim(); if(!n) return; post('/api/admin/player', {name:n}).then(function(d){ if(d.error) alert(d.error); else { document.getElementById('player-name').value=''; loadAll(); } }); }
+function delPlayer(id){ if(!confirm('この選手を削除しますか？参加登録の回答も消えます。')) return; post('/api/admin/player/delete', {id:id}).then(loadAll); }
 function editEvent(id){
   var e = STATE.events.filter(function(x){ return x.id===id; })[0]; if(!e) return;
   document.getElementById('ev-id').value = e.id;
@@ -477,6 +578,7 @@ function editEvent(id){
   document.getElementById('ev-end').value = e.end||'';
   document.getElementById('ev-place').value = e.place||'';
   document.getElementById('ev-pc').value = e.participants==null?'':e.participants;
+  document.getElementById('ev-stage').value = e.stage==='plan'?'plan':'fixed';
   document.getElementById('ev-tent').value = e.tentative?'1':'';
   document.getElementById('ev-note').value = e.note||'';
   window.scrollTo(0,0);
@@ -487,6 +589,7 @@ function saveEvent(){
     title: document.getElementById('ev-title').value, start: document.getElementById('ev-start').value,
     end: document.getElementById('ev-end').value, place: document.getElementById('ev-place').value,
     participants: document.getElementById('ev-pc').value===''?null:Number(document.getElementById('ev-pc').value),
+    stage: document.getElementById('ev-stage').value,
     tentative: document.getElementById('ev-tent').value==='1', note: document.getElementById('ev-note').value };
   post('/api/admin/event', body).then(function(d){ if(d.error) alert(d.error); else { clearEventForm(); loadAll(); } });
 }
@@ -576,6 +679,7 @@ const server = http.createServer(async (req, res) => {
 
     if (p === '/') return sendHTML(res, viewerPage());
     if (p === '/coach') return sendHTML(res, coachPage());
+    if (p === '/player') return sendHTML(res, playerPage());
     if (p === '/admin') return sendHTML(res, adminPage());
 
     if (p === '/api/state') {
@@ -589,7 +693,8 @@ const server = http.createServer(async (req, res) => {
         const ds = d.toISOString().slice(0, 10);
         if (isHoliday(ds)) hol.push(ds);
       }
-      return sendJSON(res, 200, { events: eventsInRange(from, to), holidays: hol });
+      const fixedOnly = eventsInRange(from, to).filter(e => e.stage === 'fixed');
+      return sendJSON(res, 200, { events: fixedOnly, holidays: hol });
     }
 
     if (p === '/api/coach') {
@@ -651,6 +756,33 @@ const server = http.createServer(async (req, res) => {
       return sendJSON(res, 200, { ok: true });
     }
 
+    if (p === '/api/player') {
+      const player = playerByToken(u.searchParams.get('k'));
+      if (!player) return sendJSON(res, 404, { error: 'リンクが正しくありません。管理者から送られたリンクを開いてください。' });
+      const fromD = new Date(Date.now() - 62 * 86400000 + 9 * 3600 * 1000);
+      const from = fromD.toISOString().slice(0, 10);
+      const toD = new Date(Date.now() + 62 * 86400000 + 9 * 3600 * 1000);
+      const to = toD.toISOString().slice(0, 10);
+      const events = eventsInRange(from, to).filter(e => e.stage === 'fixed').map(e => {
+        const att = DB.pattendance[e.id] || {};
+        return Object.assign({}, e, { mine: att[player.id] || '' });
+      });
+      return sendJSON(res, 200, { player: { id: player.id, name: player.name }, today: todayJST(), events });
+    }
+
+    if (p === '/api/player/attend' && req.method === 'POST') {
+      const b = await readBody(req);
+      const player = playerByToken(b.k);
+      if (!player) return sendJSON(res, 404, { error: 'リンクが正しくありません' });
+      const ev = DB.events.find(e => e.id === b.eventId);
+      if (!ev) return sendJSON(res, 404, { error: '予定が見つかりません' });
+      if (!['yes', 'no', 'maybe'].includes(b.status)) return sendJSON(res, 400, { error: '回答が正しくありません' });
+      if (!DB.pattendance[ev.id]) DB.pattendance[ev.id] = {};
+      DB.pattendance[ev.id][player.id] = b.status;
+      saveDB();
+      return sendJSON(res, 200, { ok: true });
+    }
+
     if (p === '/api/auth/status') {
       return sendJSON(res, 200, { hasPassword: !!DB.adminPassHash, authed: isAdmin(req) });
     }
@@ -688,7 +820,8 @@ const server = http.createServer(async (req, res) => {
         const polls = DB.polls.map(pl => Object.assign(pollPublic(pl, null), { responses: pl.responses || {} }));
         return sendJSON(res, 200, {
           coaches: DB.coaches.map(c => ({ id: c.id, name: c.name, token: c.token })),
-          events, attendance: DB.attendance, pollsRaw: DB.polls, polls
+          players: DB.players.map(pl => ({ id: pl.id, name: pl.name, token: pl.token })),
+          events, attendance: DB.attendance, pattendance: DB.pattendance, pollsRaw: DB.polls, polls
         });
       }
       if (p === '/api/admin/event' && req.method === 'POST') {
@@ -707,6 +840,7 @@ const server = http.createServer(async (req, res) => {
         ev.date = b.date; ev.group = b.group; ev.title = String(b.title).trim();
         ev.start = b.start || ''; ev.end = b.end || ''; ev.place = String(b.place || '').trim();
         ev.note = String(b.note || '').trim(); ev.tentative = !!b.tentative;
+        ev.stage = b.stage === 'plan' ? 'plan' : 'fixed';
         ev.participants = (b.participants === null || b.participants === undefined || b.participants === '') ? null : Math.max(0, Math.floor(Number(b.participants) || 0));
         saveDB();
         return sendJSON(res, 200, { ok: true, id: ev.id });
@@ -714,6 +848,27 @@ const server = http.createServer(async (req, res) => {
       if (p === '/api/admin/event/delete' && req.method === 'POST') {
         DB.events = DB.events.filter(e => e.id !== b.id);
         delete DB.attendance[b.id];
+        delete DB.pattendance[b.id];
+        saveDB();
+        return sendJSON(res, 200, { ok: true });
+      }
+      if (p === '/api/admin/event/stage' && req.method === 'POST') {
+        const ev = DB.events.find(e => e.id === b.id);
+        if (!ev) return sendJSON(res, 404, { error: '予定が見つかりません' });
+        ev.stage = b.stage === 'plan' ? 'plan' : 'fixed';
+        saveDB();
+        return sendJSON(res, 200, { ok: true });
+      }
+      if (p === '/api/admin/player' && req.method === 'POST') {
+        if (!b.name || !String(b.name).trim()) return sendJSON(res, 400, { error: '選手名を入れてください' });
+        const pl = { id: uid(8), name: String(b.name).trim(), token: uid(18) };
+        DB.players.push(pl);
+        saveDB();
+        return sendJSON(res, 200, { ok: true, player: pl });
+      }
+      if (p === '/api/admin/player/delete' && req.method === 'POST') {
+        DB.players = DB.players.filter(pl => pl.id !== b.id);
+        for (const eid of Object.keys(DB.pattendance)) { if (DB.pattendance[eid]) delete DB.pattendance[eid][b.id]; }
         saveDB();
         return sendJSON(res, 200, { ok: true });
       }
@@ -730,7 +885,7 @@ const server = http.createServer(async (req, res) => {
           const ds = b.month + '-' + String(d).padStart(2, '0');
           const dup = DB.events.some(e => e.date === ds && e.group === b.group && e.title === String(b.title).trim() && (e.start || '') === (b.start || ''));
           if (dup) continue;
-          DB.events.push({ id: uid(8), date: ds, group: b.group, title: String(b.title).trim(), start: b.start || '', end: b.end || '', place: String(b.place || '').trim(), note: '', tentative: false, participants: null });
+          DB.events.push({ id: uid(8), date: ds, group: b.group, title: String(b.title).trim(), start: b.start || '', end: b.end || '', place: String(b.place || '').trim(), note: '', tentative: false, participants: null, stage: 'plan' });
           created++;
         }
         saveDB();
@@ -786,7 +941,7 @@ const server = http.createServer(async (req, res) => {
         const cd = poll.candidates.find(c => c.id === b.candId);
         if (!cd) return sendJSON(res, 404, { error: '候補日が見つかりません' });
         const group = b.group === 'jr' ? 'jr' : 'stc';
-        const ev = { id: uid(8), date: cd.date, group, title: poll.title, start: cd.start || '', end: cd.end || '', place: cd.label || '', note: '日程調整で決定', tentative: false, participants: null };
+        const ev = { id: uid(8), date: cd.date, group, title: poll.title, start: cd.start || '', end: cd.end || '', place: cd.label || '', note: '日程調整で決定', tentative: false, participants: null, stage: 'plan' };
         DB.events.push(ev);
         poll.decidedCandId = cd.id;
         poll.closed = true;
