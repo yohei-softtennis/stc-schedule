@@ -300,11 +300,9 @@ function dl(ds){ var d=new Date(ds+'T00:00:00'); return (d.getMonth()+1)+'/'+d.g
 function load(){
   fetch('/api/coach?k='+encodeURIComponent(K)).then(function(r){ return r.json(); }).then(function(d){
     if(d.error){ document.getElementById('who').innerHTML = '<div class="err">'+esc(d.error)+'</div>'; return; }
-    document.getElementById('who').innerHTML = '<div class="notice"><b>'+esc(d.coach.name)+'</b> コーチのページです。今後の予定ごとに出席・欠席・未定を押してください。回答はそのまま予定表の引率と出欠一覧に反映されます。</div>';
-    var h = '';
-    if(!d.events.length) h += '<div class="card">今後の予定はまだ登録されていません。</div>';
-    d.events.forEach(function(e){
-      h += '<div class="card"><div><span class="badge '+(e.group==='jr'?'b-jr':'b-stc')+'">'+(e.group==='jr'?'Jr':'STC')+'</span>';
+    document.getElementById('who').innerHTML = '<div class="notice"><b>'+esc(d.coach.name)+'</b> コーチのページです。予定ごとに出席・欠席・未定を押してください。過去の予定は参加実績として入力できます。回答はそのまま予定表の引率と出欠一覧に反映されます。</div>';
+    function evCard(e){
+      var h = '<div class="card"><div><span class="badge '+(e.group==='jr'?'b-jr':'b-stc')+'">'+(e.group==='jr'?'Jr':'STC')+'</span>';
       h += '<b>'+dl(e.date)+'</b> <span class="t" style="font-weight:700">'+esc(e.title)+(e.tentative?' ？':'')+'</span></div>';
       if(e.start) h += '<div>🕐 '+esc(e.start)+(e.end?'〜'+esc(e.end):'')+'</div>';
       if(e.place) h += '<div>📍 '+esc(e.place)+'</div>';
@@ -316,8 +314,18 @@ function load(){
         + '<button class="'+(e.mine==='no'?'on-no':'')+'" onclick="attend(\\''+e.id+'\\',\\'no\\')">欠席</button></div>';
       h += '<div class="row" style="margin-top:8px;align-items:end"><div><label>参加者数（ジュニア）</label><input type="number" min="0" id="pc-'+e.id+'" value="'+(e.participants==null?'':e.participants)+'" placeholder="未入力"></div>'
         + '<div style="flex:0"><button class="sub" onclick="savePc(\\''+e.id+'\\')">人数を保存</button></div></div>';
-      h += '</div>';
-    });
+      return h + '</div>';
+    }
+    var up = d.events.filter(function(e){ return e.date >= d.today; });
+    var past = d.events.filter(function(e){ return e.date < d.today; }).reverse();
+    var h = '<h2 style="margin:4px 0 8px">今後の予定</h2>';
+    if(!up.length) h += '<div class="card">今後の予定はまだ登録されていません。</div>';
+    up.forEach(function(e){ h += evCard(e); });
+    if(past.length){
+      h += '<h2 style="margin:16px 0 8px">過去の予定（参加実績の入力）</h2>';
+      h += '<div class="mut" style="margin-bottom:8px">終わった予定も、実際に参加したかどうかを入力できます。参加実績の確認に使われます。</div>';
+      past.forEach(function(e){ h += evCard(e); });
+    }
     document.getElementById('list').innerHTML = h;
     var ph = '';
     d.polls.forEach(function(p){
@@ -587,7 +595,8 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/coach') {
       const coach = coachByToken(u.searchParams.get('k'));
       if (!coach) return sendJSON(res, 404, { error: 'リンクが正しくありません。管理者から送られたリンクを開いてください。' });
-      const from = todayJST();
+      const fromD = new Date(Date.now() - 62 * 86400000 + 9 * 3600 * 1000);
+      const from = fromD.toISOString().slice(0, 10);
       const toD = new Date(Date.now() + 62 * 86400000 + 9 * 3600 * 1000);
       const to = toD.toISOString().slice(0, 10);
       const events = eventsInRange(from, to).map(e => {
@@ -595,7 +604,7 @@ const server = http.createServer(async (req, res) => {
         return Object.assign({}, e, { mine: att[coach.id] || '' });
       });
       const polls = DB.polls.filter(pl => !pl.closed || true).map(pl => pollPublic(pl, coach.id));
-      return sendJSON(res, 200, { coach: { id: coach.id, name: coach.name }, events, polls });
+      return sendJSON(res, 200, { coach: { id: coach.id, name: coach.name }, today: todayJST(), events, polls });
     }
 
     if (p === '/api/coach/attend' && req.method === 'POST') {
@@ -672,7 +681,7 @@ const server = http.createServer(async (req, res) => {
       const b = req.method === 'POST' ? await readBody(req) : {};
 
       if (p === '/api/admin/state') {
-        const from = new Date(Date.now() - 31 * 86400000).toISOString().slice(0, 10);
+        const from = new Date(Date.now() - 92 * 86400000).toISOString().slice(0, 10);
         const toD = new Date(Date.now() + 92 * 86400000);
         const to = toD.toISOString().slice(0, 10);
         const events = eventsInRange(from, to);
