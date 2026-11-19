@@ -372,6 +372,58 @@ load();
 </script></body></html>`;
 }
 
+/* ---------- ページ：計画のみ（コート予約当番用） ---------- */
+function planPage() {
+  return `<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>練習計画（コート予約用）｜岩瀬STC</title><style>${CSS}
+@media print { header, footer, .noprint { display:none !important; } body { background:#fff; } .wrap { max-width:none; } }
+</style></head><body>
+<header><div class="ttl">📝 練習計画（計画のみ）</div>
+<nav><a href="/">予定表（確定）</a></nav></header>
+<div class="wrap">
+<div class="nav noprint"><button class="sub" onclick="move(-1)">◀ 前の月</button><span class="mtitle" id="mtitle"></span><button class="sub" onclick="move(1)">次の月 ▶</button><button class="sub" onclick="window.print()">🖨 印刷する</button></div>
+<div class="mut" style="margin-bottom:8px">コーチが決めた練習計画（まだコート未確保の分）だけを月ごとに表示しています。コートの予約にご利用ください。予約が取れた日は、管理者が「確定」に切り替えると予定表に載ります。</div>
+<div class="tblwrap"><table id="tbl"></table></div>
+</div>
+<footer>岩瀬ジュニア・岩瀬STC 開発アプリ</footer>
+<script>
+var cur = new Date(); cur.setDate(1); cur.setMonth(cur.getMonth() + 1);
+var WD = ['日','月','火','水','木','金','土'];
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function move(n){ cur.setMonth(cur.getMonth() + n); load(); }
+function load(){
+  var ym = cur.getFullYear() + '-' + String(cur.getMonth() + 1).padStart(2, '0');
+  document.getElementById('mtitle').textContent = cur.getFullYear() + '年' + (cur.getMonth() + 1) + '月';
+  fetch('/api/plan?month=' + ym).then(function(r){ return r.json(); }).then(function(d){
+    var HOL = {}; (d.holidays || []).forEach(function(ds){ HOL[ds] = 1; });
+    var byDate = {};
+    d.events.forEach(function(e){ (byDate[e.date] = byDate[e.date] || []).push(e); });
+    var y = cur.getFullYear(), m = cur.getMonth();
+    var last = new Date(y, m + 1, 0).getDate();
+    var h = '<tr><th style="width:92px">日付</th><th>計画</th></tr>';
+    for(var day = 1; day <= last; day++){
+      var ds = ym + '-' + String(day).padStart(2, '0');
+      var dt = new Date(y, m, day);
+      var cls = (dt.getDay() === 0 || HOL[ds]) ? 'sun' : '';
+      var evs = byDate[ds] || [];
+      var cell = '';
+      if(!evs.length) cell = '<span class="mut">—</span>';
+      evs.forEach(function(e){
+        cell += '<div class="ev"><span class="badge ' + (e.group === 'jr' ? 'b-jr' : 'b-stc') + '">' + (e.group === 'jr' ? 'Jr' : 'STC') + '</span><span class="badge b-ques">計画</span> <b>' + esc(e.title) + (e.tentative ? ' ？' : '') + '</b>'
+          + (e.start ? ' ' + esc(e.start) + (e.end ? '〜' + esc(e.end) : '') : '')
+          + (e.place ? ' 📍' + esc(e.place) : '')
+          + (e.note ? '<div class="mut">' + esc(e.note) + '</div>' : '') + '</div>';
+      });
+      h += '<tr><td class="dayc ' + cls + '">' + day + '<span class="wd">（' + WD[dt.getDay()] + '）</span></td><td>' + cell + '</td></tr>';
+    }
+    document.getElementById('tbl').innerHTML = h;
+  });
+}
+load();
+</script></body></html>`;
+}
+
 /* ---------- ページ：選手・保護者専用（参加登録） ---------- */
 function playerPage() {
   return `<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8">
@@ -452,6 +504,7 @@ function adminPage() {
 <div><label>段階</label><select id="ev-stage"><option value="fixed">確定（コート確保済み・予定表に公開）</option><option value="plan">計画（コーチ決定・まだ予約前）</option></select></div>
 </div>
 <div class="mut">「計画」の予定は予定表（公開ページ）には出ません。20日の予約でコートが取れたら「確定」に切り替えると、コーチ・保護者に共有されます。定例の一括登録は「計画」で入ります。</div>
+<div class="mut" style="margin-top:6px">📝 計画だけのページ（コート予約当番の保護者用）：<span id="planurl" style="word-break:break-all"></span> <button class="sub" onclick="copyPlanLink()">リンクをコピー</button><br>このリンクを当番の保護者に送ると、その月の計画だけが見られます（印刷もできます）。</div>
 <label>備考</label><input id="ev-note">
 <div class="row" style="margin-top:10px">
 <button onclick="saveEvent()">保存する</button>
@@ -553,6 +606,8 @@ function renderEvents(){
 }
 function clearEventForm(){ ['ev-id','ev-title','ev-place','ev-note','ev-pc'].forEach(function(i){ document.getElementById(i).value=''; }); document.getElementById('ev-tent').value=''; document.getElementById('ev-stage').value='fixed'; }
 function toggleStage(id, stage){ post('/api/admin/event/stage', {id:id, stage:stage}).then(function(d){ if(d.error) alert(d.error); else loadAll(); }); }
+function copyPlanLink(){ var link = location.origin + '/plan'; if(navigator.clipboard) navigator.clipboard.writeText(link).then(function(){ alert('コピーしました。このリンクをコート予約当番の保護者にLINEで送ってください。'); }); else prompt('このリンクをコピーしてください', link); }
+document.getElementById('planurl').textContent = location.origin + '/plan';
 function renderPlayers(){
   var h = '';
   (STATE.players||[]).forEach(function(pl){
@@ -680,6 +735,7 @@ const server = http.createServer(async (req, res) => {
     if (p === '/') return sendHTML(res, viewerPage());
     if (p === '/coach') return sendHTML(res, coachPage());
     if (p === '/player') return sendHTML(res, playerPage());
+    if (p === '/plan') return sendHTML(res, planPage());
     if (p === '/admin') return sendHTML(res, adminPage());
 
     if (p === '/api/state') {
@@ -754,6 +810,22 @@ const server = http.createServer(async (req, res) => {
       poll.responses[coach.id][b.candId] = b.mark;
       saveDB();
       return sendJSON(res, 200, { ok: true });
+    }
+
+    if (p === '/api/plan') {
+      const ym = u.searchParams.get('month') || todayJST().slice(0, 7);
+      const parts = ym.split('-').map(Number);
+      const last = new Date(parts[0], parts[1], 0).getDate();
+      const from = ym + '-01';
+      const to = ym + '-' + String(last).padStart(2, '0');
+      const hol = [];
+      const toDate = new Date(to + 'T00:00:00Z');
+      for (let d = new Date(from + 'T00:00:00Z'); d <= toDate; d = new Date(d.getTime() + 86400000)) {
+        const ds = d.toISOString().slice(0, 10);
+        if (isHoliday(ds)) hol.push(ds);
+      }
+      const planOnly = eventsInRange(from, to).filter(e => e.stage === 'plan');
+      return sendJSON(res, 200, { events: planOnly, holidays: hol });
     }
 
     if (p === '/api/player') {
