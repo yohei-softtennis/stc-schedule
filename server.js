@@ -253,7 +253,7 @@ function evHtml(e){
   return h+'</div>';
 }
 function load(){
-  var ym = fmt(cur.toISOString());
+  var ym = cur.getFullYear() + '-' + String(cur.getMonth()+1).padStart(2, '0');
   document.getElementById('mtitle').textContent = cur.getFullYear()+'年'+(cur.getMonth()+1)+'月';
   fetch('/api/state?month='+ym).then(function(r){ return r.json(); }).then(function(d){
     var byDay = {};
