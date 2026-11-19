@@ -12,7 +12,17 @@ const DATA_FILE = path.join(DATA_DIR, 'data.json');
 
 /* ---------- データ ---------- */
 function blankDB() {
-  return { adminPassHash: null, coaches: [], players: [], events: [], attendance: {}, pattendance: {}, polls: [], sessions: {} };
+  return { adminPassHash: null, coaches: [], players: [], events: [], attendance: {}, pattendance: {}, polls: [], sessions: {}, settings: { payHalf: 0, payFull: 0 } };
+}
+function eventKind(ev) {
+  if (ev.dayType === 'half' || ev.dayType === 'full') return ev.dayType;
+  if (ev.start && ev.end) {
+    const [sh, sm] = String(ev.start).split(':').map(Number);
+    const [eh, em] = String(ev.end).split(':').map(Number);
+    const diff = (eh * 60 + em) - (sh * 60 + sm);
+    if (diff >= 360) return 'full';
+  }
+  return 'half';
 }
 let DB = blankDB();
 function loadDB() {
@@ -26,6 +36,7 @@ function loadDB() {
     if (!Array.isArray(DB.polls)) DB.polls = [];
     if (!DB.attendance || typeof DB.attendance !== 'object') DB.attendance = {};
     if (!DB.pattendance || typeof DB.pattendance !== 'object') DB.pattendance = {};
+    if (!DB.settings || typeof DB.settings !== 'object') DB.settings = { payHalf: 0, payFull: 0 };
     if (!DB.sessions || typeof DB.sessions !== 'object') DB.sessions = {};
   } catch (e) { DB = blankDB(); }
 }
@@ -139,6 +150,8 @@ function eventPublic(ev) {
     start: ev.start || '', end: ev.end || '', place: ev.place || '',
     note: ev.note || '', tentative: !!ev.tentative,
     stage: ev.stage === 'plan' ? 'plan' : 'fixed',
+    dayType: (ev.dayType === 'half' || ev.dayType === 'full') ? ev.dayType : '',
+    kind: eventKind(ev),
     participants: (ev.participants === null || ev.participants === undefined) ? null : ev.participants,
     yesNames, noNames, maybeNames, answeredCount: answered, coachCount: DB.coaches.length,
     pYesNames, pNoNames, pMaybeNames, pAnsweredCount: pAnswered, playerCount: DB.players.length
@@ -476,13 +489,98 @@ load();
 </script></body></html>`;
 }
 
+/* ---------- ページ：コーチ報酬の集計（管理者） ---------- */
+function payPage() {
+  return `<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>コーチ報酬の集計｜岩瀬STC</title><style>${CSS}
+@media print { header, footer, .noprint { display:none !important; } body { background:#fff; } .wrap { max-width:none; } }
+</style></head><body>
+<header><div class="ttl">💰 コーチ報酬の集計</div>
+<nav><a href="/admin">管理者ページ</a><a href="/">予定表</a></nav></header>
+<div class="wrap">
+
+<div class="card" id="login-card" style="display:none">
+<h2>🔐 管理者ログイン</h2>
+<div class="row"><div><label>パスワード</label><input type="password" id="pw"></div>
+<div style="flex:0;align-self:end"><button onclick="doLogin()">ログイン</button></div></div>
+<div class="err" id="login-err"></div>
+</div>
+
+<div id="main" style="display:none">
+<div class="card">
+<div class="nav noprint"><button class="sub" onclick="move(-1)">◀ 前の月</button><span class="mtitle" id="mtitle"></span><button class="sub" onclick="move(1)">次の月 ▶</button><button class="sub" onclick="window.print()">🖨 印刷する</button></div>
+<div class="row noprint">
+<div><label>報酬額：半日以下（円／回）</label><input type="number" min="0" id="rate-half"></div>
+<div><label>報酬額：1日（円／回）</label><input type="number" min="0" id="rate-full"></div>
+<div style="flex:0;align-self:end"><button onclick="saveRates()">報酬額を保存</button></div>
+</div>
+<div class="mut">対象は「確定」の予定で、コーチが出席と回答した分です。半日／1日の区分は予定の時間から自動判定します（6時間以上＝1日、それ以外＝半日）。予定ごとに管理者ページの編集で区分を変えることもできます。</div>
+<div id="paytbl" style="margin-top:10px"></div>
+</div>
+</div>
+
+</div>
+<footer>岩瀬ジュニア・岩瀬STC 開発アプリ</footer>
+<script>
+var cur = new Date(); cur.setDate(1);
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function yen(n){ return Number(n||0).toLocaleString('ja-JP') + '円'; }
+function post(url, body){ return fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)}).then(function(r){ return r.json(); }); }
+function move(n){ cur.setMonth(cur.getMonth() + n); load(); }
+function doLogin(){
+  post('/api/auth/login', {password: document.getElementById('pw').value}).then(function(d){
+    if(d.error){ document.getElementById('login-err').textContent = d.error; return; }
+    init();
+  });
+}
+function saveRates(){
+  post('/api/admin/pay/rates', { payHalf: Number(document.getElementById('rate-half').value || 0), payFull: Number(document.getElementById('rate-full').value || 0) }).then(function(d){
+    if(d.error) alert(d.error); else load();
+  });
+}
+function load(){
+  var ym = cur.getFullYear() + '-' + String(cur.getMonth() + 1).padStart(2, '0');
+  document.getElementById('mtitle').textContent = cur.getFullYear() + '年' + (cur.getMonth() + 1) + '月';
+  fetch('/api/admin/pay?month=' + ym).then(function(r){ return r.json(); }).then(function(d){
+    if(d.error){ document.getElementById('paytbl').innerHTML = '<div class="err">' + esc(d.error) + '</div>'; return; }
+    document.getElementById('rate-half').value = d.rates.payHalf || '';
+    document.getElementById('rate-full').value = d.rates.payFull || '';
+    var h = '<div class="tblwrap"><table><tr><th>コーチ</th><th>半日（回）</th><th>1日（回）</th><th>合計（回）</th><th>支給額</th></tr>';
+    var tH = 0, tF = 0, tAmt = 0;
+    d.coaches.forEach(function(c){
+      var amt = c.half * (d.rates.payHalf || 0) + c.full * (d.rates.payFull || 0);
+      tH += c.half; tF += c.full; tAmt += amt;
+      h += '<tr><td><b>' + esc(c.name) + '</b></td><td>' + c.half + '</td><td>' + c.full + '</td><td>' + (c.half + c.full) + '</td><td><b>' + yen(amt) + '</b></td></tr>';
+    });
+    h += '<tr style="background:#eef4ee"><td><b>合計</b></td><td><b>' + tH + '</b></td><td><b>' + tF + '</b></td><td><b>' + (tH + tF) + '</b></td><td><b>' + yen(tAmt) + '</b></td></tr></table></div>';
+    if(!d.coaches.length) h = '<div class="mut">コーチがまだ登録されていません。</div>';
+    document.getElementById('paytbl').innerHTML = h;
+  });
+}
+function init(){
+  fetch('/api/auth/status').then(function(r){ return r.json(); }).then(function(d){
+    if(d.hasPassword && !d.authed){
+      document.getElementById('login-card').style.display = 'block';
+      document.getElementById('main').style.display = 'none';
+      return;
+    }
+    document.getElementById('login-card').style.display = 'none';
+    document.getElementById('main').style.display = 'block';
+    load();
+  });
+}
+init();
+</script></body></html>`;
+}
+
 /* ---------- ページ：管理者 ---------- */
 function adminPage() {
   return `<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>管理者｜岩瀬STC予定表</title><style>${CSS}</style></head><body>
 <header><div class="ttl">🛠 管理者ページ</div>
-<nav><a href="/">予定表</a></nav></header>
+<nav><a href="/">予定表</a><a href="/admin/pay">💰 報酬集計</a></nav></header>
 <div class="wrap">
 <div id="auth"></div>
 <div id="main" style="display:none">
@@ -502,6 +600,7 @@ function adminPage() {
 <div><label>参加者数（ジュニア・手入力）</label><input type="number" min="0" id="ev-pc" placeholder="未入力"></div>
 <div><label>未確定</label><select id="ev-tent"><option value="">確定</option><option value="1">未確定（？を付ける）</option></select></div>
 <div><label>段階</label><select id="ev-stage"><option value="fixed">確定（コート確保済み・予定表に公開）</option><option value="plan">計画（コーチ決定・まだ予約前）</option></select></div>
+<div><label>報酬区分</label><select id="ev-daytype"><option value="">自動（時間で判定）</option><option value="half">半日</option><option value="full">1日</option></select></div>
 </div>
 <div class="mut">「計画」の予定は予定表（公開ページ）には出ません。20日の予約でコートが取れたら「確定」に切り替えると、コーチ・保護者に共有されます。定例の一括登録は「計画」で入ります。</div>
 <div class="mut" style="margin-top:6px">📝 計画だけのページ（コート予約当番の保護者用）：<span id="planurl" style="word-break:break-all"></span> <button class="sub" onclick="copyPlanLink()">リンクをコピー</button><br>このリンクを当番の保護者に送ると、その月の計画だけが見られます（印刷もできます）。</div>
@@ -604,7 +703,7 @@ function renderEvents(){
   if(!STATE.events.length) h += '<tr><td colspan="3" class="mut">予定はまだありません。</td></tr>';
   document.getElementById('evlist').innerHTML = h + '</table>';
 }
-function clearEventForm(){ ['ev-id','ev-title','ev-place','ev-note','ev-pc'].forEach(function(i){ document.getElementById(i).value=''; }); document.getElementById('ev-tent').value=''; document.getElementById('ev-stage').value='fixed'; }
+function clearEventForm(){ ['ev-id','ev-title','ev-place','ev-note','ev-pc'].forEach(function(i){ document.getElementById(i).value=''; }); document.getElementById('ev-tent').value=''; document.getElementById('ev-stage').value='fixed'; document.getElementById('ev-daytype').value=''; }
 function toggleStage(id, stage){ post('/api/admin/event/stage', {id:id, stage:stage}).then(function(d){ if(d.error) alert(d.error); else loadAll(); }); }
 function copyPlanLink(){ var link = location.origin + '/plan'; if(navigator.clipboard) navigator.clipboard.writeText(link).then(function(){ alert('コピーしました。このリンクをコート予約当番の保護者にLINEで送ってください。'); }); else prompt('このリンクをコピーしてください', link); }
 document.getElementById('planurl').textContent = location.origin + '/plan';
@@ -634,6 +733,7 @@ function editEvent(id){
   document.getElementById('ev-place').value = e.place||'';
   document.getElementById('ev-pc').value = e.participants==null?'':e.participants;
   document.getElementById('ev-stage').value = e.stage==='plan'?'plan':'fixed';
+  document.getElementById('ev-daytype').value = e.dayType || '';
   document.getElementById('ev-tent').value = e.tentative?'1':'';
   document.getElementById('ev-note').value = e.note||'';
   window.scrollTo(0,0);
@@ -645,6 +745,7 @@ function saveEvent(){
     end: document.getElementById('ev-end').value, place: document.getElementById('ev-place').value,
     participants: document.getElementById('ev-pc').value===''?null:Number(document.getElementById('ev-pc').value),
     stage: document.getElementById('ev-stage').value,
+    dayType: document.getElementById('ev-daytype').value,
     tentative: document.getElementById('ev-tent').value==='1', note: document.getElementById('ev-note').value };
   post('/api/admin/event', body).then(function(d){ if(d.error) alert(d.error); else { clearEventForm(); loadAll(); } });
 }
@@ -737,6 +838,7 @@ const server = http.createServer(async (req, res) => {
     if (p === '/player') return sendHTML(res, playerPage());
     if (p === '/plan') return sendHTML(res, planPage());
     if (p === '/admin') return sendHTML(res, adminPage());
+    if (p === '/admin/pay') return sendHTML(res, payPage());
 
     if (p === '/api/state') {
       const month = u.searchParams.get('month') || todayJST().slice(0, 7);
@@ -896,6 +998,32 @@ const server = http.createServer(async (req, res) => {
           events, attendance: DB.attendance, pattendance: DB.pattendance, pollsRaw: DB.polls, polls
         });
       }
+      if (p === '/api/admin/pay' && req.method === 'GET') {
+        const ym = u.searchParams.get('month') || todayJST().slice(0, 7);
+        const parts = ym.split('-').map(Number);
+        const last = new Date(parts[0], parts[1], 0).getDate();
+        const from = ym + '-01';
+        const to = ym + '-' + String(last).padStart(2, '0');
+        const rows = DB.coaches.map(c => ({ id: c.id, name: c.name, half: 0, full: 0 }));
+        const byId = {};
+        rows.forEach(r => { byId[r.id] = r; });
+        for (const ev of DB.events) {
+          if (ev.date < from || ev.date > to) continue;
+          if (ev.stage === 'plan') continue;
+          const att = DB.attendance[ev.id] || {};
+          const kind = eventKind(ev);
+          for (const cid of Object.keys(att)) {
+            if (att[cid] === 'yes' && byId[cid]) byId[cid][kind]++;
+          }
+        }
+        return sendJSON(res, 200, { coaches: rows, rates: { payHalf: DB.settings.payHalf || 0, payFull: DB.settings.payFull || 0 } });
+      }
+      if (p === '/api/admin/pay/rates' && req.method === 'POST') {
+        DB.settings.payHalf = Math.max(0, Math.floor(Number(b.payHalf) || 0));
+        DB.settings.payFull = Math.max(0, Math.floor(Number(b.payFull) || 0));
+        saveDB();
+        return sendJSON(res, 200, { ok: true });
+      }
       if (p === '/api/admin/event' && req.method === 'POST') {
         if (!validDate(b.date)) return sendJSON(res, 400, { error: '日付を選んでください' });
         if (!b.title || !String(b.title).trim()) return sendJSON(res, 400, { error: '内容を入れてください' });
@@ -913,6 +1041,7 @@ const server = http.createServer(async (req, res) => {
         ev.start = b.start || ''; ev.end = b.end || ''; ev.place = String(b.place || '').trim();
         ev.note = String(b.note || '').trim(); ev.tentative = !!b.tentative;
         ev.stage = b.stage === 'plan' ? 'plan' : 'fixed';
+        ev.dayType = (b.dayType === 'half' || b.dayType === 'full') ? b.dayType : '';
         ev.participants = (b.participants === null || b.participants === undefined || b.participants === '') ? null : Math.max(0, Math.floor(Number(b.participants) || 0));
         saveDB();
         return sendJSON(res, 200, { ok: true, id: ev.id });
