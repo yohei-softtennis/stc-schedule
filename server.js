@@ -996,6 +996,23 @@ const server = http.createServer(async (req, res) => {
       if (added) saveDB();
       return sendJSON(res, 200, { ok: true, added, skipped, errors: errors.length });
     }
+    if (p === '/api/agent/events/cleanup' && req.method === 'POST') {
+      const b = await readBody(req);
+      const token = req.headers['x-agent-token'] || '';
+      if (!DB.settings.agentTokenHash || !checkPw(token, DB.settings.agentTokenHash)) return sendJSON(res, 401, { error: 'invalid token' });
+      const keepMonth = String(b.keepMonth || '');
+      if (!/^\d{4}-\d{2}$/.test(keepMonth)) return sendJSON(res, 400, { error: 'keepMonth (YYYY-MM) is required' });
+      const before = DB.events.length;
+      const removedIds = [];
+      DB.events = DB.events.filter(e => {
+        if (String(e.date || '').startsWith(keepMonth)) return true;
+        removedIds.push(e.id);
+        return false;
+      });
+      for (const id of removedIds) { delete DB.attendance[id]; delete DB.pattendance[id]; }
+      if (removedIds.length) saveDB();
+      return sendJSON(res, 200, { ok: true, deleted: removedIds.length, kept: DB.events.length, before });
+    }
     if (p === '/api/auth/status') {
       return sendJSON(res, 200, { hasPassword: !!DB.adminPassHash, authed: isAdmin(req) });
     }
