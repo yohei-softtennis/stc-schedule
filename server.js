@@ -658,6 +658,12 @@ function adminPage() {
 </div>
 <div id="polllist" style="margin-top:10px"></div>
 </div>
+
+<div class="card"><h2>🔑 連携トークン（イロ用）</h2>
+<div class="mut">イロ（Muse）に予定の登録を頼むときに使う鍵です。発行したトークンをイロに伝えてください。再発行すると前のトークンは使えなくなります。</div>
+<div style="margin-top:10px"><button onclick="issueAgentToken()">トークンを発行する</button></div>
+<div id="agenttoken" style="margin-top:10px"></div>
+</div>
 </div>
 </div>
 <footer>岩瀬ジュニア・岩瀬STC 開発アプリ</footer>
@@ -817,6 +823,13 @@ function renderPolls(){
   if(!STATE.polls.length) h = '<div class="mut">日程調整はまだありません。</div>';
   document.getElementById('polllist').innerHTML = h;
 }
+function issueAgentToken(){
+  if(!confirm('新しいトークンを発行しますか？（前のトークンは使えなくなります）')) return;
+  post('/api/admin/agent-token', {}).then(function(d){
+    if(d.error){ alert(d.error); return; }
+    document.getElementById('agenttoken').innerHTML = '<div class="mut">このトークンをイロに伝えてください（画面を切り替えると再表示できません）：</div><div style="font-weight:700;word-break:break-all;background:#f4f6fb;border:1px solid #d8deea;border-radius:8px;padding:10px;margin-top:6px">' + esc(d.token) + '</div>';
+  });
+}
 function togglePoll(id){ post('/api/admin/poll/toggle', {id:id}).then(loadAll); }
 function delPoll(id){ if(!confirm('この日程調整を削除しますか？')) return; post('/api/admin/poll/delete', {id:id}).then(loadAll); }
 function decidePoll(pid, cid){
@@ -957,6 +970,31 @@ const server = http.createServer(async (req, res) => {
       return sendJSON(res, 200, { ok: true });
     }
 
+    if (p === '/api/agent/events/import' && req.method === 'POST') {
+      const b = await readBody(req);
+      const token = req.headers['x-agent-token'] || '';
+      if (!DB.settings.agentTokenHash || !checkPw(token, DB.settings.agentTokenHash)) return sendJSON(res, 401, { error: 'invalid token' });
+      const list = Array.isArray(b.events) ? b.events : [];
+      let added = 0, skipped = 0;
+      const errors = [];
+      for (const it of list) {
+        if (!validDate(it.date) || !it.title || !String(it.title).trim() || !['stc', 'jr'].includes(it.group) || !validTime(it.start) || !validTime(it.end)) { errors.push(it); continue; }
+        const title = String(it.title).trim();
+        const dup = DB.events.some(e => e.date === it.date && e.group === it.group && e.title === title && (e.start || '') === (it.start || ''));
+        if (dup) { skipped++; continue; }
+        DB.events.push({
+          id: uid(8), date: it.date, group: it.group, title,
+          start: it.start || '', end: it.end || '', place: String(it.place || '').trim(),
+          note: String(it.note || '').trim(), tentative: !!it.tentative,
+          stage: it.stage === 'plan' ? 'plan' : 'fixed',
+          dayType: (it.dayType === 'half' || it.dayType === 'full') ? it.dayType : '',
+          participants: null
+        });
+        added++;
+      }
+      if (added) saveDB();
+      return sendJSON(res, 200, { ok: true, added, skipped, errors: errors.length });
+    }
     if (p === '/api/auth/status') {
       return sendJSON(res, 200, { hasPassword: !!DB.adminPassHash, authed: isAdmin(req) });
     }
@@ -1023,6 +1061,12 @@ const server = http.createServer(async (req, res) => {
         DB.settings.payFull = Math.max(0, Math.floor(Number(b.payFull) || 0));
         saveDB();
         return sendJSON(res, 200, { ok: true });
+      }
+      if (p === '/api/admin/agent-token' && req.method === 'POST') {
+        const token = crypto.randomBytes(24).toString('hex');
+        DB.settings.agentTokenHash = hashPw(token);
+        saveDB();
+        return sendJSON(res, 200, { ok: true, token });
       }
       if (p === '/api/admin/event' && req.method === 'POST') {
         if (!validDate(b.date)) return sendJSON(res, 400, { error: '日付を選んでください' });
