@@ -844,7 +844,8 @@ authView();
 const server = http.createServer(async (req, res) => {
   try {
     const u = new URL(req.url, 'http://x');
-    const p = u.pathname;
+    let p = u.pathname;
+    if (p.length > 1) p = p.replace(/\/+$/, '');
 
     if (p === '/') return sendHTML(res, viewerPage());
     if (p === '/coach') return sendHTML(res, coachPage());
